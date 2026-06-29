@@ -19,7 +19,11 @@ import {
   type ProteinStatus,
   type WaterStatus,
 } from "@/lib/daily-checkin";
-import { normalizeWeightFromText } from "@/lib/weight-normalization";
+import {
+  applyOnboardingWeightHints,
+  normalizeWeightFromText,
+} from "@/lib/weight";
+import { resolveOnboardingNumericInput } from "@/lib/onboarding-numeric";
 
 type MemoryType = "preference" | "habit" | "goal" | "persona" | "note";
 type ChatRole = "user" | "assistant";
@@ -303,66 +307,6 @@ function mergeOnboardingDraft(
   });
 
   return nextDraft;
-}
-
-function readWeightFromInput(input: string, keywords: string[]) {
-  const keywordPattern = keywords.join("|");
-  const patterns = [
-    new RegExp(
-      `(?:${keywordPattern})[^，。,.!?！？]{0,12}?(\\d+(?:\\.\\d+)?)\\s*(kg|公斤|千克|斤)?`,
-      "i",
-    ),
-    new RegExp(
-      `(\\d+(?:\\.\\d+)?)\\s*(kg|公斤|千克|斤)?[^，。,.!?！？]{0,8}(?:${keywordPattern})`,
-      "i",
-    ),
-  ];
-
-  for (const pattern of patterns) {
-    const match = input.match(pattern);
-
-    if (!match) {
-      continue;
-    }
-
-    const rawValue = Number(match[1]);
-    const unit = match[2]?.toLowerCase();
-
-    if (!Number.isFinite(rawValue)) {
-      continue;
-    }
-
-    if (unit === "kg" || unit === "公斤" || unit === "千克") {
-      return rawValue;
-    }
-
-    if (unit === "斤" || !unit) {
-      return Number((rawValue / 2).toFixed(1));
-    }
-  }
-
-  return null;
-}
-
-function applyWeightUnitHints(input: string, profile: OnboardingProfile) {
-  const nextProfile = { ...profile };
-  const currentWeight = readWeightFromInput(input, [
-    "体重",
-    "当前",
-    "现在",
-    "空腹",
-  ]);
-  const goalWeight = readWeightFromInput(input, ["目标", "想到", "减到"]);
-
-  if (currentWeight !== null && nextProfile.weight_kg !== null) {
-    nextProfile.weight_kg = currentWeight;
-  }
-
-  if (goalWeight !== null && nextProfile.goal_weight_kg !== null) {
-    nextProfile.goal_weight_kg = goalWeight;
-  }
-
-  return nextProfile;
 }
 
 function normalizeMemoryCandidate(
@@ -778,10 +722,43 @@ async function handleOnboardingInChat({
   message: string;
   onboardingDraft: OnboardingDraft;
 }) {
-  const profile = mergeOnboardingDraft(
-    onboardingDraft,
-    applyWeightUnitHints(message, await extractOnboardingProfile(message)),
-  );
+  const numericResolution = resolveOnboardingNumericInput({
+    input: message,
+    currentDraft: onboardingDraft,
+  });
+
+  if (numericResolution.type === "confirm") {
+    await saveChatMessage({
+      supabase,
+      userId,
+      role: "assistant",
+      content: numericResolution.message,
+    });
+
+    return NextResponse.json({
+      ok: true,
+      type: "onboarding_confirm",
+      message: numericResolution.message,
+      profile: onboardingDraft,
+      onboardingDraft,
+    });
+  }
+
+  const extractedProfile =
+    numericResolution.type === "patch"
+      ? {
+          ...createEmptyOnboardingDraft(),
+          ...numericResolution.patch,
+        }
+      : await extractOnboardingProfile(message);
+  const profile = applyOnboardingWeightHints({
+    input: message,
+    currentDraft: onboardingDraft,
+    extractedProfile: mergeOnboardingDraft(
+      createEmptyOnboardingDraft(),
+      extractedProfile,
+    ),
+  });
   const validationMessage = validateMergedOnboardingProfile(profile);
 
   if (validationMessage) {

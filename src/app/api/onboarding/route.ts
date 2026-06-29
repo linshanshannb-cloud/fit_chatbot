@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { applyOnboardingWeightHints } from "@/lib/weight";
+import { resolveOnboardingNumericInput } from "@/lib/onboarding-numeric";
 
 type OnboardingProfile = {
   nickname: string | null;
@@ -151,66 +153,6 @@ function mergeDraft(
   });
 
   return nextDraft;
-}
-
-function readWeightFromInput(input: string, keywords: string[]) {
-  const keywordPattern = keywords.join("|");
-  const patterns = [
-    new RegExp(
-      `(?:${keywordPattern})[^，。,.!?！？]{0,12}?(\\d+(?:\\.\\d+)?)\\s*(kg|公斤|千克|斤)?`,
-      "i",
-    ),
-    new RegExp(
-      `(\\d+(?:\\.\\d+)?)\\s*(kg|公斤|千克|斤)?[^，。,.!?！？]{0,8}(?:${keywordPattern})`,
-      "i",
-    ),
-  ];
-
-  for (const pattern of patterns) {
-    const match = input.match(pattern);
-
-    if (!match) {
-      continue;
-    }
-
-    const rawValue = Number(match[1]);
-    const unit = match[2]?.toLowerCase();
-
-    if (!Number.isFinite(rawValue)) {
-      continue;
-    }
-
-    if (unit === "kg" || unit === "公斤" || unit === "千克") {
-      return rawValue;
-    }
-
-    if (unit === "斤" || !unit) {
-      return Number((rawValue / 2).toFixed(1));
-    }
-  }
-
-  return null;
-}
-
-function applyWeightUnitHints(input: string, profile: OnboardingProfile) {
-  const nextProfile = { ...profile };
-  const currentWeight = readWeightFromInput(input, [
-    "体重",
-    "当前",
-    "现在",
-    "空腹",
-  ]);
-  const goalWeight = readWeightFromInput(input, ["目标", "想到", "减到"]);
-
-  if (currentWeight !== null && nextProfile.weight_kg !== null) {
-    nextProfile.weight_kg = currentWeight;
-  }
-
-  if (goalWeight !== null && nextProfile.goal_weight_kg !== null) {
-    nextProfile.goal_weight_kg = goalWeight;
-  }
-
-  return nextProfile;
 }
 
 function getMissingFields(profile: OnboardingProfile) {
@@ -456,8 +398,36 @@ export async function POST(request: Request) {
       );
     }
 
-    const extractedProfile = applyWeightUnitHints(input, await extractProfile(input));
-    const profile = mergeDraft(onboardingDraft, extractedProfile);
+    const numericResolution = resolveOnboardingNumericInput({
+      input,
+      currentDraft: onboardingDraft,
+    });
+
+    if (numericResolution.type === "confirm") {
+      return NextResponse.json(
+        {
+          ok: false,
+          profile: onboardingDraft,
+          onboardingDraft,
+          missingFields: getMissingFields(onboardingDraft),
+          message: numericResolution.message,
+        },
+        { status: 400 },
+      );
+    }
+
+    const extractedProfile =
+      numericResolution.type === "patch"
+        ? {
+            ...createEmptyDraft(),
+            ...numericResolution.patch,
+          }
+        : await extractProfile(input);
+    const profile = applyOnboardingWeightHints({
+      input,
+      currentDraft: onboardingDraft,
+      extractedProfile: mergeDraft(createEmptyDraft(), extractedProfile),
+    });
     const validation = validateProfile(profile);
 
     if (!validation.ok) {
