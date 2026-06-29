@@ -19,6 +19,7 @@ import {
   type ProteinStatus,
   type WaterStatus,
 } from "@/lib/daily-checkin";
+import { normalizeWeightFromText } from "@/lib/weight-normalization";
 
 type MemoryType = "preference" | "habit" | "goal" | "persona" | "note";
 type ChatRole = "user" | "assistant";
@@ -937,6 +938,72 @@ function validateBodyUpdate(update: BodyUpdate) {
   return null;
 }
 
+function hasCurrentWeightIntent(message: string) {
+  return (
+    /(体重|称重|称了|称一下|空腹|瘦到|胖到|重了|轻了|现在是|现在).{0,8}\d/.test(
+      message,
+    ) || /\d+(?:\.\d+)?\s*(kg|KG|公斤|千克|斤)/.test(message)
+  );
+}
+
+function normalizeBodyUpdateWeight({
+  message,
+  bodyUpdate,
+  latestRecord,
+}: {
+  message: string;
+  bodyUpdate: BodyUpdate;
+  latestRecord: BodyRecord | null;
+}) {
+  if (
+    !bodyUpdate.is_body_update ||
+    bodyUpdate.subject !== "self" ||
+    bodyUpdate.should_save !== true
+  ) {
+    return {
+      bodyUpdate,
+      confirmationMessage: null as string | null,
+    };
+  }
+
+  if (bodyUpdate.weight_kg === null && !hasCurrentWeightIntent(message)) {
+    return {
+      bodyUpdate,
+      confirmationMessage: null as string | null,
+    };
+  }
+
+  const normalized = normalizeWeightFromText({
+    input: message,
+    modelWeightKg: bodyUpdate.weight_kg,
+    userHistoryWeight: latestRecord
+      ? toNumberOrNull(latestRecord.weight_kg)
+      : null,
+  });
+
+  if (normalized.needsConfirmation) {
+    return {
+      bodyUpdate,
+      confirmationMessage: `你说的${normalized.rawWeight}是斤还是公斤？确认后我再帮你记录。`,
+    };
+  }
+
+  if (normalized.weightKg === null) {
+    return {
+      bodyUpdate,
+      confirmationMessage: null as string | null,
+    };
+  }
+
+  return {
+    bodyUpdate: {
+      ...bodyUpdate,
+      weight_kg: normalized.weightKg,
+    },
+    confirmationMessage: null as string | null,
+  };
+}
+
 function formatChange(current: number, previous: number, unit: string) {
   const diff = Number((current - previous).toFixed(1));
 
@@ -1457,10 +1524,33 @@ export async function POST(request: Request) {
     }
 
     const memories = await fetchUserMemories(supabase, userId);
-    const bodyUpdate = guardBodyUpdateDecision(
+    let bodyUpdate = guardBodyUpdateDecision(
       message,
       await extractBodyUpdate(message),
     );
+    const normalizedBodyUpdate = normalizeBodyUpdateWeight({
+      message,
+      bodyUpdate,
+      latestRecord,
+    });
+    bodyUpdate = normalizedBodyUpdate.bodyUpdate;
+
+    if (normalizedBodyUpdate.confirmationMessage) {
+      await saveChatMessage({
+        supabase,
+        userId,
+        role: "assistant",
+        content: normalizedBodyUpdate.confirmationMessage,
+      });
+
+      return NextResponse.json({
+        ok: true,
+        type: "body_update_confirmation",
+        message: normalizedBodyUpdate.confirmationMessage,
+        bodyUpdate,
+      });
+    }
+
     const checkinPatch = await createCheckinPatchFromMessage({
       message,
       bodyUpdate,

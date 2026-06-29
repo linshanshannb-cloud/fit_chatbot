@@ -113,9 +113,15 @@ export function createCheckinPatchFromExtraction(
     patch.cardio_duration = extraction.cardio_duration;
   }
 
-  if (extraction.water_status) patch.water_status = extraction.water_status;
-  if (extraction.diet_status) patch.diet_status = extraction.diet_status;
-  if (extraction.protein_status) patch.protein_status = extraction.protein_status;
+  if (extraction.water_status && extraction.water_status !== "unknown") {
+    patch.water_status = extraction.water_status;
+  }
+  if (extraction.diet_status && extraction.diet_status !== "unknown") {
+    patch.diet_status = extraction.diet_status;
+  }
+  if (extraction.protein_status && extraction.protein_status !== "unknown") {
+    patch.protein_status = extraction.protein_status;
+  }
 
   return patch;
 }

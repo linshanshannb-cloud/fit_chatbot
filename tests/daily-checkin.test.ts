@@ -45,6 +45,23 @@ test("creates daily checkin patch from extracted training and nutrition", () => 
   assert.equal(hasCheckinPatch(patch), true);
 });
 
+test("does not overwrite existing checkin fields with unknown statuses", () => {
+  const patch = createCheckinPatchFromExtraction({
+    ...emptyExtraction,
+    has_checkin_info: true,
+    weight: 91.5,
+    water_status: "unknown",
+    protein_status: "unknown",
+    diet_status: "unknown",
+  });
+
+  assert.equal(patch.weight_recorded, true);
+  assert.equal(patch.weight_value, 91.5);
+  assert.equal("water_status" in patch, false);
+  assert.equal("protein_status" in patch, false);
+  assert.equal("diet_status" in patch, false);
+});
+
 test("ignores third party and hypothetical checkin text", () => {
   assert.equal(shouldIgnoreCheckinInput("张三今天练腿了"), true);
   assert.equal(shouldIgnoreCheckinInput("我朋友跑了30分钟"), true);
