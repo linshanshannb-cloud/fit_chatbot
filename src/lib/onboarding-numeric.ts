@@ -1,4 +1,4 @@
-import { normalizeWeight } from "./weight.ts";
+import { normalizeWeight } from "./weight";
 
 export type OnboardingNumericField =
   | "age"
@@ -112,11 +112,11 @@ export function resolveOnboardingNumericInput({
         message: `${input.trim()} 是斤还是公斤？确认后我再帮你记录。`,
       };
     }
-
+    
     if (normalized.weightKg === null) {
       return createNone();
     }
-
+    
     return {
       type: "patch",
       confidence: 1,
